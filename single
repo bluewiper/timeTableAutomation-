@@ -1,0 +1,547 @@
+/* 기능 상세
+- 시간표 템플릿대로 입력 가능(확장성 X) >> 스프레드 시트 인식 with 클로드
+- 과목명 시수 입력 가능(확장성 X) >> PDF 불러오기 with 클로드
+- 휴일 입력 가능(확장성 X) 
+- 검수 가능(확장성 X) 
+- iOS만 적용
+- 운영기간 변경 시 */
+
+// ===== 메인 함수 =====
+function generateSchedule() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 설정 읽기
+  const config = readConfig(ss);
+  
+  // 교육일 계산 (공휴일 제외)
+  const allDays = calculateAllDays(config.startDate, config.endDate);
+  
+  // 과목 배치 계획 생성
+  const schedulePlan = createSchedulePlan();
+  
+  // 실제 iOS 8회차 형식으로 시간표 생성 (병합 없이)
+  outputRealFormatNoCellMerge(ss, allDays, schedulePlan);
+  
+  SpreadsheetApp.getUi().alert('시간표 생성이 완료되었습니다!');
+}
+
+// ===== 설정 읽기 =====
+function readConfig(ss) {
+  const configSheet = ss.getSheetByName('설정');
+  if (!configSheet) {
+    throw new Error('설정 시트가 없습니다. 먼저 설정 시트를 생성해주세요.');
+  }
+  
+  const data = configSheet.getRange('A2:B6').getValues();
+  return {
+    startDate: new Date(data[0][1]),
+    endDate: new Date(data[1][1])
+  };
+}
+
+// ===== 2025년 공휴일 정의 =====
+function getHolidays2025() {
+  return {
+    '2025-01-01': '신정',
+    '2025-01-28': '설날',
+    '2025-01-29': '설날',
+    '2025-01-30': '설날',
+    '2025-03-01': '삼일절',
+    '2025-05-05': '어린이날',
+    '2025-06-06': '현충일',
+    '2025-08-15': '광복절',
+    '2025-10-03': '개천절',
+    '2025-10-06': '추석',
+    '2025-10-07': '추석',
+    '2025-10-08': '대체휴일',
+    '2025-10-09': '한글날',
+    '2025-10-10': '휴무',  // 커스텀 휴일
+    '2025-12-25': '성탄절'
+  };
+}
+
+// ===== 모든 평일 계산 =====
+function calculateAllDays(startDate, endDate) {
+  const days = [];
+  const holidays = getHolidays2025();
+  let current = new Date(startDate);
+  
+  while (current <= endDate) {
+    const dayOfWeek = current.getDay();
+    
+    // 평일만 포함 (월=1 ~ 금=5)
+    if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+      const dateStr = Utilities.formatDate(current, 'Asia/Seoul', 'yyyy-MM-dd');
+      const monthDay = (current.getMonth() + 1) + '/' + current.getDate();
+      const weekDayNames = ['일', '월', '화', '수', '목', '금', '토'];
+      
+      days.push({
+        date: new Date(current),
+        dateStr: dateStr,
+        displayStr: monthDay + '(' + weekDayNames[dayOfWeek] + ')',
+        isHoliday: holidays.hasOwnProperty(dateStr),
+        holidayName: holidays[dateStr] || null
+      });
+    }
+    
+    current.setDate(current.getDate() + 1);
+  }
+  
+  return days;
+}
+
+// ===== 과목 배치 계획 =====
+function createSchedulePlan() {
+  // 실제 iOS 8회차 시간표와 동일한 패턴
+  const plan = [];
+  let dayCount = 0;
+  
+  // 1주차: 미니프로젝트 4일 (금요일 광복절)
+  for (let i = 0; i < 4; i++) {
+    plan.push('미니프로젝트');
+    dayCount++;
+  }
+  
+  // 2주차: 월(미니프로젝트) + 화~금(Swift 기초)
+  plan.push('미니프로젝트');
+  dayCount++;
+  for (let i = 0; i < 4; i++) {
+    plan.push('Swift 문법 종합반 - 기초');
+    dayCount++;
+  }
+  
+  // 3주차: 월(Swift 기초) + 화~금(Swift 심화)
+  plan.push('Swift 문법 종합반 - 기초');
+  dayCount++;
+  for (let i = 0; i < 4; i++) {
+    plan.push('Swift 문법 종합반 - 심화');
+    dayCount++;
+  }
+  
+  // 4주차: 월(Swift 심화) + 화~금(iOS 입문)
+  plan.push('Swift 문법 종합반 - 심화');
+  dayCount++;
+  for (let i = 0; i < 4; i++) {
+    plan.push('iOS 앱개발 입문');
+    dayCount++;
+  }
+  
+  // 5주차: 전체 iOS 입문
+  for (let i = 0; i < 5; i++) {
+    plan.push('iOS 앱개발 입문');
+    dayCount++;
+  }
+  
+  // 6주차: 월(iOS 입문) + 화~금(주특기 기초)
+  plan.push('iOS 앱개발 입문');
+  dayCount++;
+  for (let i = 0; i < 4; i++) {
+    plan.push('[프로젝트]주특기 기초 프로젝트');
+    dayCount++;
+  }
+  
+  // 7주차: 월(주특기 기초) + 화~금(iOS 숙련)
+  plan.push('[프로젝트]주특기 기초 프로젝트');
+  dayCount++;
+  for (let i = 0; i < 4; i++) {
+    plan.push('iOS 앱개발 숙련');
+    dayCount++;
+  }
+  
+  // 8주차: 월~목(iOS 숙련), 금(개천절)
+  for (let i = 0; i < 4; i++) {
+    plan.push('iOS 앱개발 숙련');
+    dayCount++;
+  }
+  
+  // 9주차는 추석 연휴로 스킵
+  
+  // 10주차: 월(iOS 숙련) + 화~금(주특기 숙련)
+  plan.push('iOS 앱개발 숙련');
+  dayCount++;
+  for (let i = 0; i < 4; i++) {
+    plan.push('[프로젝트]주특기 숙련 프로젝트');
+    dayCount++;
+  }
+  
+  // 11주차: 월화(주특기 숙련) + 수~금(iOS 심화)
+  for (let i = 0; i < 2; i++) {
+    plan.push('[프로젝트]주특기 숙련 프로젝트');
+    dayCount++;
+  }
+  for (let i = 0; i < 3; i++) {
+    plan.push('iOS 앱개발 심화');
+    dayCount++;
+  }
+  
+  // 12주차: 전체 iOS 심화
+  for (let i = 0; i < 5; i++) {
+    plan.push('iOS 앱개발 심화');
+    dayCount++;
+  }
+  
+  // 13주차: 월(iOS 심화) + 화~금(주특기 심화)
+  plan.push('iOS 앱개발 심화');
+  dayCount++;
+  for (let i = 0; i < 4; i++) {
+    plan.push('[프로젝트]주특기 심화 프로젝트');
+    dayCount++;
+  }
+  
+  // 14주차: 월~수(주특기 심화) + 목금(실전)
+  for (let i = 0; i < 3; i++) {
+    plan.push('[프로젝트]주특기 심화 프로젝트');
+    dayCount++;
+  }
+  for (let i = 0; i < 2; i++) {
+    plan.push('[프로젝트]실전 프로젝트');
+    dayCount++;
+  }
+  
+  // 15~18주차: 실전 프로젝트
+  // 나머지 모든 날은 실전 프로젝트
+  while (dayCount < 90) {
+    plan.push('[프로젝트]실전 프로젝트');
+    dayCount++;
+  }
+  
+  // 18주차 마지막에 특강 추가
+  // 마지막 2시간은 이력서/모의면접/협력사특강으로 대체
+  
+  return plan;
+}
+
+// ===== 병합 없이 실제 형식으로 출력 =====
+function outputRealFormatNoCellMerge(ss, allDays, schedulePlan) {
+  // 새 시트 생성
+  let sheet = ss.getSheetByName('iOS_시간표');
+  if (!sheet) {
+    sheet = ss.insertSheet('iOS_시간표');
+  } else {
+    sheet.clear();
+  }
+  
+  // 시간대 정의 (09:00 ~ 21:00)
+  const timeSlots = [];
+  for (let hour = 9; hour <= 20; hour++) {
+    timeSlots.push({
+      start: `${String(hour).padStart(2, '0')}:00`,
+      end: `${String(hour + 1).padStart(2, '0')}:00`
+    });
+  }
+  
+  let currentRow = 1;
+  let dayIndex = 0;
+  let planIndex = 0;
+  let weekNum = 1;
+  
+  // 주차별로 처리
+  while (dayIndex < allDays.length) {
+    // 빈 행
+    currentRow++;
+    
+    // 주차 표시
+    sheet.getRange(currentRow, 2).setValue(`${weekNum}주차`);
+    sheet.getRange(currentRow, 2, 1, 8).merge();
+    sheet.getRange(currentRow, 2)
+      .setHorizontalAlignment('center')
+      .setFontWeight('bold')
+      .setBackground('#d9ead3')
+      .setFontSize(11);
+    currentRow++;
+    
+    // 이번 주의 날짜와 과목 수집
+    const weekDates = [];
+    const weekSubjects = [];
+    
+    for (let i = 0; i < 5 && dayIndex < allDays.length; i++) {
+      const day = allDays[dayIndex];
+      weekDates.push(day.displayStr);
+      
+      if (day.isHoliday) {
+        weekSubjects.push(day.holidayName);
+      } else if (planIndex < schedulePlan.length) {
+        weekSubjects.push(schedulePlan[planIndex]);
+        planIndex++;
+      }
+      
+      dayIndex++;
+    }
+    
+    // 날짜 행
+    currentRow++;
+    for (let i = 0; i < weekDates.length; i++) {
+      sheet.getRange(currentRow, 5 + i).setValue(weekDates[i]);
+    }
+    sheet.getRange(currentRow, 5, 1, 5)
+      .setHorizontalAlignment('center')
+      .setFontWeight('bold')
+      .setBackground('#fff2cc');
+    currentRow++;
+    
+    // 시간 헤더
+    sheet.getRange(currentRow, 2).setValue('시작시간');
+    sheet.getRange(currentRow, 4).setValue('종료시간');
+    sheet.getRange(currentRow, 2, 1, 3)
+      .setBackground('#f4cccc')
+      .setFontWeight('bold');
+    currentRow++;
+    
+    // 시간별 과목 출력 (병합 없이)
+    timeSlots.forEach((slot, slotIndex) => {
+      // 시간 정보
+      sheet.getRange(currentRow, 2).setValue(slot.start);
+      sheet.getRange(currentRow, 3).setValue('~');
+      sheet.getRange(currentRow, 4).setValue(slot.end);
+      
+      // 각 요일의 과목 (병합 없이 각 셀에 입력)
+      weekSubjects.forEach((subject, dayIdx) => {
+        if (subject) {
+          // GIT 특강 처리 (1주차 수요일 15:00~17:00)
+          if (weekNum === 1 && dayIdx === 2 && 
+              (slot.start === '15:00' || slot.start === '16:00')) {
+            sheet.getRange(currentRow, 5 + dayIdx).setValue('[특강] GIT 특강');
+            sheet.getRange(currentRow, 5 + dayIdx).setBackground('#e6b8af');
+          } 
+          // 18주차 금요일 - 이력서 작성과 모의면접
+          else if (weekNum === 18 && dayIdx === 4) {
+            // 09:00~19:00 이력서 작성 (10시간)
+            if (slotIndex < 10) {
+              sheet.getRange(currentRow, 5 + dayIdx).setValue('이력서 작성');
+              sheet.getRange(currentRow, 5 + dayIdx).setBackground('#cfe2f3');
+            } 
+            // 19:00~21:00 모의면접 (2시간) - 수정: 8시간이 되도록
+            else {
+              sheet.getRange(currentRow, 5 + dayIdx).setValue('모의면접');
+              sheet.getRange(currentRow, 5 + dayIdx).setBackground('#b4a7d6');
+            }
+          }
+          // 18주차 목요일 - 모의면접 추가 6시간
+          else if (weekNum === 18 && dayIdx === 3) {
+            // 15:00~21:00 모의면접 (6시간)
+            if (slotIndex >= 6) {
+              sheet.getRange(currentRow, 5 + dayIdx).setValue('모의면접');
+              sheet.getRange(currentRow, 5 + dayIdx).setBackground('#b4a7d6');
+            } else {
+              sheet.getRange(currentRow, 5 + dayIdx).setValue(subject);
+            }
+          }
+          // 18주차 월요일 협력사 특강
+          else if (weekNum === 18 && dayIdx === 0 && 
+                   (slot.start === '19:00' || slot.start === '20:00')) {
+            sheet.getRange(currentRow, 5 + dayIdx).setValue('협력사 특강');
+            sheet.getRange(currentRow, 5 + dayIdx).setBackground('#d9d2e9');
+          }
+          // 공휴일 처리
+          else if (['광복절', '추석', '개천절', '한글날', '대체휴일', '휴무'].includes(subject)) {
+            sheet.getRange(currentRow, 5 + dayIdx).setValue(subject);
+            sheet.getRange(currentRow, 5 + dayIdx)
+              .setBackground('#ea9999')
+              .setFontColor('#cc0000')
+              .setFontWeight('bold');
+          }
+          // 일반 과목
+          else {
+            sheet.getRange(currentRow, 5 + dayIdx).setValue(subject);
+            sheet.getRange(currentRow, 5 + dayIdx)
+              .setHorizontalAlignment('center')
+              .setVerticalAlignment('middle');
+          }
+        }
+      });
+      
+      currentRow++;
+    });
+    
+    weekNum++;
+  }
+  
+  // 전체 서식 조정
+  sheet.autoResizeColumns(2, 8);
+  sheet.setColumnWidth(1, 30);  // 왼쪽 여백
+  sheet.setColumnWidth(2, 80);  // 시작시간
+  sheet.setColumnWidth(3, 30);  // ~
+  sheet.setColumnWidth(4, 80);  // 종료시간
+  
+  // 날짜 열들 너비 조정
+  for (let col = 5; col <= 9; col++) {
+    sheet.setColumnWidth(col, 150);
+  }
+  
+  // 검수용 요약 시트 추가
+  addSummarySheet(ss);
+}
+
+// ===== 검수용 요약 시트 생성 =====
+function addSummarySheet(ss) {
+  let summarySheet = ss.getSheetByName('검수_요약');
+  if (!summarySheet) {
+    summarySheet = ss.insertSheet('검수_요약');
+  } else {
+    summarySheet.clear();
+  }
+  
+  // 헤더
+  const headers = [['과목명', '계획 시수', '실제 시수', '차이']];
+  summarySheet.getRange(1, 1, 1, 4).setValues(headers);
+  summarySheet.getRange(1, 1, 1, 4)
+    .setBackground('#4285f4')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold');
+  
+  // 과목별 시수 정의
+  const subjectHours = [
+    ['미니프로젝트', 58],
+    ['Swift 문법 종합반 - 기초', 60],
+    ['Swift 문법 종합반 - 심화', 60],
+    ['iOS 앱개발 입문', 120],
+    ['[프로젝트]주특기 기초 프로젝트', 60],
+    ['iOS 앱개발 숙련', 108],
+    ['iOS 앱개발 심화', 108],
+    ['[프로젝트]주특기 숙련 프로젝트', 72],
+    ['[프로젝트]주특기 심화 프로젝트', 84],
+    ['[프로젝트]실전 프로젝트', 328],
+    ['[특강] GIT 특강', 2],
+    ['이력서 작성', 10],
+    ['모의면접', 8],
+    ['협력사 특강', 2]
+  ];
+  
+  // 데이터 입력
+  let row = 2;
+  subjectHours.forEach(([subject, plannedHours]) => {
+    summarySheet.getRange(row, 1).setValue(subject);
+    summarySheet.getRange(row, 2).setValue(plannedHours);
+    
+    // COUNTIF 수식으로 실제 시수 계산
+    const formula = `=COUNTIF('iOS_시간표'!E:I,"${subject}")`;
+    summarySheet.getRange(row, 3).setFormula(formula);
+    
+    // 차이 계산
+    summarySheet.getRange(row, 4).setFormula(`=C${row}-B${row}`);
+    
+    row++;
+  });
+  
+  // 합계 행
+  summarySheet.getRange(row, 1).setValue('합계');
+  summarySheet.getRange(row, 2).setFormula(`=SUM(B2:B${row-1})`);
+  summarySheet.getRange(row, 3).setFormula(`=SUM(C2:C${row-1})`);
+  summarySheet.getRange(row, 4).setFormula(`=C${row}-B${row}`);
+  
+  summarySheet.getRange(row, 1, 1, 4)
+    .setBackground('#ffe599')
+    .setFontWeight('bold');
+  
+  // 서식 조정
+  summarySheet.autoResizeColumns(1, 4);
+  
+  // 조건부 서식 (차이가 0이 아니면 빨간색)
+  const range = summarySheet.getRange(2, 4, row-1, 1);
+  const rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenNumberNotEqualTo(0)
+    .setBackground('#ff9999')
+    .setRanges([range])
+    .build();
+  
+  summarySheet.setConditionalFormatRules([rule]);
+}
+
+// ===== 메뉴 추가 =====
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('📅 시간표 자동화')
+    .addItem('📊 시간표 생성하기', 'generateSchedule')
+    .addItem('⚙️ 설정 시트 만들기', 'createConfigSheets')
+    .addSeparator()
+    .addItem('✅ 시수 검증하기', 'verifyHours')
+    .addItem('ℹ️ 도움말', 'showHelp')
+    .addToUi();
+}
+
+// ===== 시수 검증 함수 =====
+function verifyHours() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const summarySheet = ss.getSheetByName('검수_요약');
+  
+  if (!summarySheet) {
+    SpreadsheetApp.getUi().alert('먼저 시간표를 생성해주세요.');
+    return;
+  }
+  
+  // 합계 확인
+  const totalPlanned = summarySheet.getRange('B16').getValue();
+  const totalActual = summarySheet.getRange('C16').getValue();
+  const totalDiff = summarySheet.getRange('D16').getValue();
+  
+  let message = `검증 결과:\n\n`;
+  message += `계획된 총 시수: ${totalPlanned}시간\n`;
+  message += `실제 배치된 시수: ${totalActual}시간\n`;
+  message += `차이: ${totalDiff}시간\n\n`;
+  
+  if (totalDiff === 0) {
+    message += '✅ 시수가 정확하게 배치되었습니다!';
+  } else {
+    message += '⚠️ 시수 차이가 있습니다. 검수_요약 시트를 확인해주세요.';
+  }
+  
+  SpreadsheetApp.getUi().alert('시수 검증 결과', message, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+// ===== 설정 시트 생성 =====
+function createConfigSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 설정 시트 생성
+  let configSheet = ss.getSheetByName('설정');
+  if (!configSheet) {
+    configSheet = ss.insertSheet('설정');
+  } else {
+    configSheet.clear();
+  }
+  
+  const configData = [
+    ['항목', '값'],
+    ['기수 시작일', '2025-08-11'],
+    ['기수 종료일', '2025-12-23'],
+    ['', ''],
+    ['※ 날짜는 YYYY-MM-DD 형식으로 입력하세요', ''],
+    ['※ 공휴일은 자동으로 처리됩니다', '']
+  ];
+  
+  configSheet.getRange(1, 1, configData.length, 2).setValues(configData);
+  
+  // 헤더 서식
+  configSheet.getRange(1, 1, 1, 2)
+    .setBackground('#4285f4')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold');
+  
+  // 설명 서식
+  configSheet.getRange(5, 1, 2, 1)
+    .setFontColor('#666666')
+    .setFontSize(9);
+  
+  configSheet.autoResizeColumns(1, 2);
+  
+  SpreadsheetApp.getUi().alert('✅ 설정 시트가 생성되었습니다!\n\n이제 "시간표 생성하기"를 실행하세요.');
+}
+
+// ===== 도움말 =====
+function showHelp() {
+  const message = `iOS 시간표 자동화 사용법:
+
+1. 먼저 "설정 시트 만들기"를 실행하세요
+2. 설정 시트에서 날짜를 수정하세요
+3. "시간표 생성하기"를 실행하세요
+4. "시수 검증하기"로 검수하세요
+
+특징:
+- 모든 셀에 과목명이 입력됩니다 (병합 없음)
+- COUNTIF 함수로 시수 검증이 가능합니다
+- 검수_요약 시트에서 자동 집계됩니다
+
+문의사항이 있으시면 담당자에게 연락주세요.`;
+  
+  SpreadsheetApp.getUi().alert('📖 사용 안내', message, SpreadsheetApp.getUi().ButtonSet.OK);
+}
