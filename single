@@ -1,11 +1,3 @@
-/* 기능 상세
-- 시간표 템플릿대로 입력 가능(확장성 X) >> 스프레드 시트 인식 with 클로드
-- 과목명 시수 입력 가능(확장성 X) >> PDF 불러오기 with 클로드
-- 휴일 입력 가능(확장성 X) 
-- 검수 가능(확장성 X) 
-- iOS만 적용
-- 운영기간 변경 시 */
-
 // ===== 메인 함수 =====
 function generateSchedule() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -20,8 +12,7 @@ function generateSchedule() {
   const schedulePlan = createSchedulePlan();
   
   // 실제 iOS 8회차 형식으로 시간표 생성 (병합 없이)
-  outputRealFormatNoCellMerge(ss, allDays, schedulePlan);
-  
+  outputRealFormatWithHolidayMerge(ss, allDays, schedulePlan);
   SpreadsheetApp.getUi().alert('시간표 생성이 완료되었습니다!');
 }
 
@@ -212,163 +203,123 @@ function createSchedulePlan() {
 }
 
 // ===== 병합 없이 실제 형식으로 출력 =====
-function outputRealFormatNoCellMerge(ss, allDays, schedulePlan) {
-  // 새 시트 생성
+function outputRealFormatWithHolidayMerge(ss, allDays, schedulePlan) {
+  // 새 시트 생성/초기화
   let sheet = ss.getSheetByName('iOS_시간표');
-  if (!sheet) {
-    sheet = ss.insertSheet('iOS_시간표');
-  } else {
-    sheet.clear();
-  }
-  
+  if (!sheet) sheet = ss.insertSheet('iOS_시간표'); else sheet.clear();
+
   // 시간대 정의 (09:00 ~ 21:00)
   const timeSlots = [];
   for (let hour = 9; hour <= 20; hour++) {
-    timeSlots.push({
-      start: `${String(hour).padStart(2, '0')}:00`,
-      end: `${String(hour + 1).padStart(2, '0')}:00`
-    });
+    timeSlots.push({ start: `${String(hour).padStart(2,'0')}:00`, end: `${String(hour+1).padStart(2,'0')}:00` });
   }
-  
+
   let currentRow = 1;
   let dayIndex = 0;
   let planIndex = 0;
   let weekNum = 1;
-  
-  // 주차별로 처리
+
+  const HOLIDAY_NAMES = ['광복절','추석','개천절','한글날','대체휴일','휴무'];
+
   while (dayIndex < allDays.length) {
-    // 빈 행
-    currentRow++;
-    
-    // 주차 표시
+    currentRow++; // 빈 행
+
+    // 주차 헤더
     sheet.getRange(currentRow, 2).setValue(`${weekNum}주차`);
     sheet.getRange(currentRow, 2, 1, 8).merge();
-    sheet.getRange(currentRow, 2)
-      .setHorizontalAlignment('center')
-      .setFontWeight('bold')
-      .setBackground('#d9ead3')
-      .setFontSize(11);
+    sheet.getRange(currentRow, 2).setHorizontalAlignment('center').setFontWeight('bold').setBackground('#d9ead3').setFontSize(11);
     currentRow++;
-    
-    // 이번 주의 날짜와 과목 수집
+
+    // 이번 주 날짜/과목 수집
     const weekDates = [];
     const weekSubjects = [];
-    
+
     for (let i = 0; i < 5 && dayIndex < allDays.length; i++) {
       const day = allDays[dayIndex];
       weekDates.push(day.displayStr);
-      
+
       if (day.isHoliday) {
         weekSubjects.push(day.holidayName);
       } else if (planIndex < schedulePlan.length) {
         weekSubjects.push(schedulePlan[planIndex]);
         planIndex++;
+      } else {
+        weekSubjects.push(''); // 남는 칸 보호
       }
-      
       dayIndex++;
     }
-    
+
     // 날짜 행
     currentRow++;
     for (let i = 0; i < weekDates.length; i++) {
       sheet.getRange(currentRow, 5 + i).setValue(weekDates[i]);
     }
-    sheet.getRange(currentRow, 5, 1, 5)
-      .setHorizontalAlignment('center')
-      .setFontWeight('bold')
-      .setBackground('#fff2cc');
+    sheet.getRange(currentRow, 5, 1, 5).setHorizontalAlignment('center').setFontWeight('bold').setBackground('#fff2cc');
     currentRow++;
-    
+
     // 시간 헤더
     sheet.getRange(currentRow, 2).setValue('시작시간');
     sheet.getRange(currentRow, 4).setValue('종료시간');
-    sheet.getRange(currentRow, 2, 1, 3)
-      .setBackground('#f4cccc')
-      .setFontWeight('bold');
+    sheet.getRange(currentRow, 2, 1, 3).setBackground('#f4cccc').setFontWeight('bold');
     currentRow++;
-    
-    // 시간별 과목 출력 (병합 없이)
+
+    // 이 주의 시간 블록 시작 행(휴일 병합에 필요)
+    const weekTimeStartRow = currentRow;
+
+    // 시간별 채우기 (기존 로직 유지)
     timeSlots.forEach((slot, slotIndex) => {
-      // 시간 정보
       sheet.getRange(currentRow, 2).setValue(slot.start);
       sheet.getRange(currentRow, 3).setValue('~');
       sheet.getRange(currentRow, 4).setValue(slot.end);
-      
-      // 각 요일의 과목 (병합 없이 각 셀에 입력)
+
       weekSubjects.forEach((subject, dayIdx) => {
-        if (subject) {
-          // GIT 특강 처리 (1주차 수요일 15:00~17:00)
-          if (weekNum === 1 && dayIdx === 2 && 
-              (slot.start === '15:00' || slot.start === '16:00')) {
-            sheet.getRange(currentRow, 5 + dayIdx).setValue('[특강] GIT 특강');
-            sheet.getRange(currentRow, 5 + dayIdx).setBackground('#e6b8af');
-          } 
-          // 18주차 금요일 - 이력서 작성과 모의면접
-          else if (weekNum === 18 && dayIdx === 4) {
-            // 09:00~19:00 이력서 작성 (10시간)
-            if (slotIndex < 10) {
-              sheet.getRange(currentRow, 5 + dayIdx).setValue('이력서 작성');
-              sheet.getRange(currentRow, 5 + dayIdx).setBackground('#cfe2f3');
-            } 
-            // 19:00~21:00 모의면접 (2시간) - 수정: 8시간이 되도록
-            else {
-              sheet.getRange(currentRow, 5 + dayIdx).setValue('모의면접');
-              sheet.getRange(currentRow, 5 + dayIdx).setBackground('#b4a7d6');
-            }
-          }
-          // 18주차 목요일 - 모의면접 추가 6시간
-          else if (weekNum === 18 && dayIdx === 3) {
-            // 15:00~21:00 모의면접 (6시간)
-            if (slotIndex >= 6) {
-              sheet.getRange(currentRow, 5 + dayIdx).setValue('모의면접');
-              sheet.getRange(currentRow, 5 + dayIdx).setBackground('#b4a7d6');
-            } else {
-              sheet.getRange(currentRow, 5 + dayIdx).setValue(subject);
-            }
-          }
-          // 18주차 월요일 협력사 특강
-          else if (weekNum === 18 && dayIdx === 0 && 
-                   (slot.start === '19:00' || slot.start === '20:00')) {
-            sheet.getRange(currentRow, 5 + dayIdx).setValue('협력사 특강');
-            sheet.getRange(currentRow, 5 + dayIdx).setBackground('#d9d2e9');
-          }
-          // 공휴일 처리
-          else if (['광복절', '추석', '개천절', '한글날', '대체휴일', '휴무'].includes(subject)) {
-            sheet.getRange(currentRow, 5 + dayIdx).setValue(subject);
-            sheet.getRange(currentRow, 5 + dayIdx)
-              .setBackground('#ea9999')
-              .setFontColor('#cc0000')
-              .setFontWeight('bold');
-          }
-          // 일반 과목
-          else {
-            sheet.getRange(currentRow, 5 + dayIdx).setValue(subject);
-            sheet.getRange(currentRow, 5 + dayIdx)
-              .setHorizontalAlignment('center')
-              .setVerticalAlignment('middle');
-          }
+        const cell = sheet.getRange(currentRow, 5 + dayIdx);
+        if (!subject) return;
+
+        // [특강]/모의면접/협력사 특강/휴일 등의 기존 분기 유지
+        if (weekNum === 1 && dayIdx === 2 && (slot.start === '15:00' || slot.start === '16:00')) {
+          cell.setValue('[특강] GIT 특강').setBackground('#e6b8af');
+        } else if (weekNum === 18 && dayIdx === 4) {
+          if (slotIndex < 10) cell.setValue('이력서 작성').setBackground('#cfe2f3');
+          else cell.setValue('모의면접').setBackground('#b4a7d6');
+        } else if (weekNum === 18 && dayIdx === 3) {
+          if (slotIndex >= 6) cell.setValue('모의면접').setBackground('#b4a7d6');
+          else cell.setValue(subject);
+        } else if (weekNum === 18 && dayIdx === 0 && (slot.start === '19:00' || slot.start === '20:00')) {
+          cell.setValue('협력사 특강').setBackground('#d9d2e9');
+        } else if (HOLIDAY_NAMES.includes(subject)) {
+          cell.setValue(subject).setBackground('#ea9999').setFontColor('#cc0000').setFontWeight('bold');
+        } else {
+          cell.setValue(subject).setHorizontalAlignment('center').setVerticalAlignment('middle');
         }
       });
-      
+
       currentRow++;
     });
-    
+
+    // ⬇️ 휴일 칸 병합(세로 병합: 해당 요일 컬럼의 시간 구간 전체)
+    for (let dayIdx = 0; dayIdx < weekSubjects.length; dayIdx++) {
+      const subj = weekSubjects[dayIdx];
+      if (HOLIDAY_NAMES.includes(subj)) {
+        const rng = sheet.getRange(weekTimeStartRow, 5 + dayIdx, timeSlots.length, 1);
+        rng.merge();
+        rng.setHorizontalAlignment('center').setVerticalAlignment('middle');
+        // 색/글꼴은 첫 셀 값에 이미 적용되어 있으므로 그대로 표시됨
+      }
+    }
+
     weekNum++;
   }
-  
-  // 전체 서식 조정
+
+  // 전체 서식
   sheet.autoResizeColumns(2, 8);
-  sheet.setColumnWidth(1, 30);  // 왼쪽 여백
-  sheet.setColumnWidth(2, 80);  // 시작시간
-  sheet.setColumnWidth(3, 30);  // ~
-  sheet.setColumnWidth(4, 80);  // 종료시간
-  
-  // 날짜 열들 너비 조정
-  for (let col = 5; col <= 9; col++) {
-    sheet.setColumnWidth(col, 150);
-  }
-  
-  // 검수용 요약 시트 추가
+  sheet.setColumnWidth(1, 30);
+  sheet.setColumnWidth(2, 80);
+  sheet.setColumnWidth(3, 30);
+  sheet.setColumnWidth(4, 80);
+  for (let col = 5; col <= 9; col++) sheet.setColumnWidth(col, 150);
+
+  // 검수 시트 생성/갱신
   addSummarySheet(ss);
 }
 
