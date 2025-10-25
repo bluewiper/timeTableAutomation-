@@ -1,20 +1,20 @@
 // ===== 메인 함수 =====
 function generateSchedule() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // 설정 읽기
   const config = readConfig(ss);
-  
-  // 교육일 계산 (공휴일 제외)
-  const allDays = calculateAllDays(config.startDate, config.endDate);
-  
-  // 과목 배치 계획 생성
+
+  // ✅ 공식 캘린더 + 시트 휴일 합친 맵 생성
+  const holidaysMap = getHolidaysMap(ss, config.startDate, config.endDate);
+
+  // ✅ 휴일 맵을 반영하여 평일 계산
+  const allDays = calculateAllDays(config.startDate, config.endDate, holidaysMap);
+
+  // 기존 로직 유지
   const schedulePlan = createSchedulePlan();
-  
-  // 실제 iOS 8회차 형식으로 시간표 생성 (병합 없이)
   outputRealFormatWithHolidayMerge(ss, allDays, schedulePlan);
   SpreadsheetApp.getUi().alert('시간표 생성이 완료되었습니다!');
 }
+
 
 // ===== 설정 읽기 =====
 function readConfig(ss) {
@@ -51,35 +51,79 @@ function getHolidays2025() {
   };
 }
 
+// ===== 휴일 맵 생성 유틸 =====
+
+// 공식 휴일 (대한민국) 캘린더에서 읽기
+function getHolidaysFromCalendar(startDate, endDate) {
+  const calId = 'ko.south_korea#holiday@group.v.calendar.google.com';
+  const cal = CalendarApp.getCalendarById(calId);
+  if (!cal) return {};
+
+  const events = cal.getEvents(startDate, endDate);
+  const map = {};
+  events.forEach(ev => {
+    const d = Utilities.formatDate(ev.getAllDayStartDate(), 'Asia/Seoul', 'yyyy-MM-dd');
+    map[d] = ev.getTitle(); // 예: '광복절'
+  });
+  return map;
+}
+
+// 커스텀 휴일 시트 읽기 (시트명: '휴일', A:날짜, B:휴일명, C:타입 add/remove)
+function getCustomHolidays(ss) {
+  const sheet = ss.getSheetByName('휴일');
+  const add = {}, remove = {};
+  if (!sheet) return { add, remove };
+
+  const rows = sheet.getDataRange().getValues(); // 1행은 헤더
+  for (let i = 1; i < rows.length; i++) {
+    const [rawDate, name, typeRaw] = rows[i];
+    if (!rawDate) continue;
+    const dateStr = (typeof rawDate === 'string')
+      ? rawDate
+      : Utilities.formatDate(new Date(rawDate), 'Asia/Seoul', 'yyyy-MM-dd');
+    const type = (typeRaw || '').toLowerCase();
+    if (type === 'remove') remove[dateStr] = true;
+    else add[dateStr] = name || '휴일';
+  }
+  return { add, remove };
+}
+
+// 공식 + 커스텀 휴일 합치기
+function getHolidaysMap(ss, startDate, endDate) {
+  const official = getHolidaysFromCalendar(startDate, endDate);
+  const { add, remove } = getCustomHolidays(ss);
+
+  const out = {};
+  Object.keys(official).forEach(d => { if (!remove[d]) out[d] = official[d]; });
+  Object.keys(add).forEach(d => { out[d] = add[d]; });
+  return out;
+}
+
+
 // ===== 모든 평일 계산 =====
-function calculateAllDays(startDate, endDate) {
+function calculateAllDays(startDate, endDate, holidaysMap) {
   const days = [];
-  const holidays = getHolidays2025();
+  const weekDayNames = ['일','월','화','수','목','금','토'];
   let current = new Date(startDate);
-  
+
   while (current <= endDate) {
-    const dayOfWeek = current.getDay();
-    
-    // 평일만 포함 (월=1 ~ 금=5)
-    if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+    const dow = current.getDay();
+    if (dow >= 1 && dow <= 5) {
       const dateStr = Utilities.formatDate(current, 'Asia/Seoul', 'yyyy-MM-dd');
-      const monthDay = (current.getMonth() + 1) + '/' + current.getDate();
-      const weekDayNames = ['일', '월', '화', '수', '목', '금', '토'];
-      
+      const isHoliday = !!(holidaysMap && holidaysMap[dateStr]);
       days.push({
         date: new Date(current),
-        dateStr: dateStr,
-        displayStr: monthDay + '(' + weekDayNames[dayOfWeek] + ')',
-        isHoliday: holidays.hasOwnProperty(dateStr),
-        holidayName: holidays[dateStr] || null
+        dateStr,
+        displayStr: (current.getMonth()+1) + '/' + current.getDate() + '(' + weekDayNames[dow] + ')',
+        isHoliday,
+        holidayName: isHoliday ? holidaysMap[dateStr] : null
       });
     }
-    
     current.setDate(current.getDate() + 1);
   }
-  
   return days;
 }
+
 
 // ===== 과목 배치 계획 =====
 function createSchedulePlan() {
@@ -408,6 +452,36 @@ function onOpen() {
     .addItem('✅ 시수 검증하기', 'verifyHours')
     .addItem('ℹ️ 도움말', 'showHelp')
     .addToUi();
+}
+
+// ===== 휴일 변경 시 자동 재생성 (선택) =====
+
+// 설치형 onEdit 트리거 대상
+function onHolidaySheetEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    const sheet = e.range.getSheet();
+    if (sheet.getName() !== '휴일') return;
+    if (e.range.getRow() === 1) return; // 헤더 무시
+    const col = e.range.getColumn();
+    if (col > 3) return; // A~C열만 감지
+
+    generateSchedule(); // 휴일 변경 시 즉시 재생성
+  } catch (err) {
+    Logger.log('onHolidaySheetEdit error: ' + err);
+  }
+}
+
+// 트리거 생성 (한 번만 수동 실행)
+function enableAutoRegenOnHolidayEdit() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'onHolidaySheetEdit') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('onHolidaySheetEdit')
+    .forSpreadsheet(SpreadsheetApp.getActive())
+    .onEdit()
+    .create();
+  SpreadsheetApp.getUi().alert('✅ 휴일 시트 수정 시 자동 재생성이 활성화되었습니다.');
 }
 
 // ===== 시수 검증 함수 =====
